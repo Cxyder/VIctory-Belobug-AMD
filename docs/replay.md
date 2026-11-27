@@ -56,6 +56,8 @@ with the presented one.
 
 | switch | does |
 |---|---|
+| `--top <n>` | with `--timing detailed`: how many of the costliest pipelines to list (20 by default) |
+| `--image <path>` | where to save the replay picture (defaults to `replay.png` in the capture folder) |
 | `--compare` | runs the frame unchanged and with the experiments turn by turn, and prints the difference |
 | `--skip-clamps` | no argument clamps and no barriers of their scratch buffers; draws read arguments kept from a first run |
 | `--batch-clamps` / `--batch-clamps 2` | argument clamps in batches, as `VICTORY_INDIRECT_BATCH=2` / `=1` does |
@@ -93,7 +95,7 @@ targets (where the viewport has the picture's shape), dispatches and draws with
 the textures of the picture's shape shaders may write at that time, copies,
 resolves and clears. `--of` is the size of the picture the point was read from
 (a screenshot's). The commands are numbered `<list>:<command>` as in
-`--listing`, `--slots` and `--looks`.
+`--listing`, `--slots` and `--flow`.
 
 | switch | does |
 |---|---|
@@ -120,6 +122,7 @@ report counts them). `--no-merge` runs the copies as recorded.
 |---|---|
 | `--wait-all` / `--wait-lists` | a full wait after every command / each list sent alone and waited for: if pictures still differ, waits are not what is missing |
 | `--diverge [runs]` | runs each list this often from the very same memory, finds the first commands that make different memory of it, and says what differs (same values in another order: places given out); contents go to `diverge` in the capture |
+| `--roots <n>` | with `--diverge`: maximum number of commands reported per list (4 by default) |
 | `--diverge-picture [runs]` | from each list on, runs the rest this often from the same memory: where the pictures start to agree, what lies before decides. `--lists 76 --commands 0..900 --step 8` goes into one list |
 | `--diverge 10 --lists 76 --draws <text>` | each draw of the pipelines named, alone, this often: how many outcomes, and what it reads |
 | `--watch <id>:<offset>:<bytes>` | which lists (with `--lists`: commands) change those words |
@@ -127,7 +130,10 @@ report counts them). `--no-merge` runs the copies as recorded.
 | `--check-written` | that everything the frame changes is put back |
 | `--upcopies` | runs the frame twice: which words the copies of the CPU's sides of card buffers bring that the card holds another value of (those the card wrote alike in both runs are the ones to look at), and which pieces shaders wrote that were not declared as written. The live check is `VICTORY_UPCOPY_CHECK=1` (`host/upcheck.rs`) |
 | `--flow <lists>` | what the dispatches (`--flow-draws`: draws too) have bound: pipeline, root arguments, heap slots their constants lead to; no device is made |
+| `--flow-slots <n>` | with `--flow`: maximum heap slots shown per binding location (40 by default) |
 | `--images <folder>` | runs the frame once and saves the textures its shaders write (or `--texture <id>[.<sub>]`, repeatable) as pictures, with least, mean and greatest values; `--raw`: the values too; of a buffer named, its bytes |
+| `--least <n>` | with `--images` and no `--texture`: minimum number of texels for a texture to be included (4096 by default) |
+| `--width <px>` | with `--images`: maximum image width in pixels (960 by default) |
 | `--until <list>:<command>` | nothing but barriers after that command |
 | `--dump <text>` | the DXIL of the pipelines named, in `shaders` |
 
