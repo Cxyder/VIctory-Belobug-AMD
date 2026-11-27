@@ -187,7 +187,7 @@ fn version_number(file: &str) -> Option<u64> {
 }
 
 /// The names in version folder `dir`: container, display, blobs; `None` if
-/// its manifest is missing or does not parse.
+/// its manifest is missing or does not parse, or a blob is missing.
 fn load(dir: &Path) -> std::io::Result<Option<(String, String, Vec<String>)>> {
     let bytes = match std::fs::read(dir.join(MANIFEST)) {
         Ok(bytes) => bytes,
@@ -198,6 +198,14 @@ fn load(dir: &Path) -> std::io::Result<Option<(String, String, Vec<String>)>> {
         return Ok(None);
     };
     let blobs = names.split_off(2);
+    for index in 0..blobs.len() {
+        match std::fs::metadata(dir.join(index.to_string())) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
     let [name, display] = <[String; 2]>::try_from(names).expect("two names, checked by the parser");
     Ok(Some((name, display, blobs)))
 }
@@ -244,7 +252,7 @@ fn current(dir: &Path) -> std::io::Result<Option<Version>> {
     // Versions exist but none reads: keep them all, and refuse.
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        "no save version has a readable manifest",
+        "no save version has a readable manifest and all of its blob files",
     ))
 }
 
@@ -1446,7 +1454,17 @@ mod tests {
     #[test]
     fn an_unreadable_newer_version_does_not_cost_the_save() {
         type Make = fn(&Path);
-        let strays: [(&str, Make); 3] = [
+        let strays: [(&str, Make); 5] = [
+            ("second blob missing", |p| {
+                std::fs::create_dir(p).unwrap();
+                let names = manifest("Slot", "incomplete", &["a", "b"]);
+                std::fs::write(p.join(MANIFEST), names).unwrap();
+                std::fs::write(p.join("0"), b"partial a").unwrap();
+            }),
+            ("blob is a directory", |p| {
+                std::fs::create_dir_all(p.join("0")).unwrap();
+                std::fs::write(p.join(MANIFEST), manifest("Slot", "incomplete", &["a"])).unwrap();
+            }),
             ("empty folder", |p| std::fs::create_dir(p).unwrap()),
             ("file", |p| std::fs::write(p, b"not a version").unwrap()),
             ("broken manifest", |p| {
@@ -1472,6 +1490,25 @@ mod tests {
             // Read again: the new version stays the container.
             assert_eq!(state(root), after, "{what}: second read");
         }
+    }
+
+    #[test]
+    fn an_empty_blob_or_container_can_supersede_an_older_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(update(root, "one", &[("a", Some("old a"))]), S_OK);
+        let slot = container_dir(root, "Slot");
+
+        commit(&slot, 2, "Slot", "two", &[("a", Source::Data(b""))]).unwrap();
+        assert_eq!(
+            state(root),
+            Some(("two".into(), vec![("a".into(), String::new())]))
+        );
+        assert!(!slot.join("v1").exists());
+
+        commit(&slot, 3, "Slot", "three", &[]).unwrap();
+        assert_eq!(state(root), Some(("three".into(), Vec::new())));
+        assert!(!slot.join("v2").exists());
     }
 
     /// With no readable version at all, reads and updates fail and nothing
