@@ -31,6 +31,8 @@ use windows::core::{HRESULT, IUnknown, Interface, Ref, implement};
 
 const RATE: u32 = 48_000;
 const FRAME_BYTES: usize = 4;
+// The classic RIFF size includes 36 header bytes in addition to the PCM data.
+const MAX_WAV_FRAMES: u64 = (u32::MAX as u64 - 36) / FRAME_BYTES as u64;
 
 /// Activation completes asynchronously; the recording thread polls for it.
 #[implement(IActivateAudioInterfaceCompletionHandler)]
@@ -92,8 +94,25 @@ pub fn child() -> bool {
     true
 }
 
-fn header(frames: u64) -> [u8; 44] {
-    let data = u32::try_from(frames * FRAME_BYTES as u64).unwrap_or(u32::MAX - 36);
+/// Ignore gaps of up to 2 ms as before. Check the gap and the whole packet together:
+/// writing either one first could leave more PCM than the header can describe.
+fn packet_start(written: u64, at: u64, frames: u32) -> Option<u64> {
+    let start = if at.saturating_sub(written) > u64::from(RATE / 500) {
+        at
+    } else {
+        written
+    };
+    (start.checked_add(u64::from(frames))? <= MAX_WAV_FRAMES).then_some(start)
+}
+
+fn header(frames: u64) -> std::io::Result<[u8; 44]> {
+    if frames > MAX_WAV_FRAMES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "too many PCM frames for a RIFF/WAVE file",
+        ));
+    }
+    let data = (frames * FRAME_BYTES as u64) as u32;
     let mut h = [0u8; 44];
     let fields: [(&[u8], usize); 11] = [
         (b"RIFF", 0),
@@ -112,7 +131,7 @@ fn header(frames: u64) -> [u8; 44] {
         h[at..at + bytes.len()].copy_from_slice(bytes);
     }
     h[40..].copy_from_slice(&data.to_le_bytes());
-    h
+    Ok(h)
 }
 
 fn record(pid: u32, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -179,7 +198,7 @@ fn record(pid: u32, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         )?;
         let capture: IAudioCaptureClient = client.GetService()?;
         let mut file = File::create(path)?;
-        file.write_all(&header(0))?;
+        file.write_all(&header(0)?)?;
         client.Start()?;
         tracing::info!(path = %path.display(), "recording the title's audio");
 
@@ -187,13 +206,19 @@ fn record(pid: u32, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let mut patched = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(10));
-            let ended = WaitForSingleObject(target, 0) == WAIT_OBJECT_0;
+            let mut ended = WaitForSingleObject(target, 0) == WAIT_OBJECT_0;
             while capture.GetNextPacketSize()? > 0 {
                 let (mut data, mut frames, mut flags, mut qpc) = (std::ptr::null_mut(), 0, 0, 0);
                 capture.GetBuffer(&mut data, &mut frames, &mut flags, None, Some(&mut qpc))?;
                 // Where this packet belongs, from its time stamp (100 ns).
                 let at = (qpc - *first.get_or_insert(qpc)) * u64::from(RATE) / 10_000_000;
-                if at > written + u64::from(RATE / 500) {
+                let Some(at) = packet_start(written, at, frames) else {
+                    capture.ReleaseBuffer(frames)?;
+                    tracing::warn!("audio capture stopped at the RIFF/WAVE size limit");
+                    ended = true;
+                    break;
+                };
+                if at > written {
                     tracing::debug!(
                         ms = (at - written) * 1000 / u64::from(RATE),
                         "audio capture: nothing played"
@@ -217,7 +242,7 @@ fn record(pid: u32, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             if ended || patched.elapsed() >= Duration::from_secs(1) {
                 // Valid sizes at any time: runs end by being killed.
                 file.seek(SeekFrom::Start(0))?;
-                file.write_all(&header(written))?;
+                file.write_all(&header(written)?)?;
                 file.seek(SeekFrom::End(0))?;
                 patched = Instant::now();
             }
@@ -225,5 +250,34 @@ fn record(pid: u32, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod wav_tests {
+    use super::*;
+
+    #[test]
+    fn riff_size_and_data_size_agree_at_the_last_whole_frame() {
+        let h = header(MAX_WAV_FRAMES).unwrap();
+        assert_eq!(&h[0..4], b"RIFF");
+        let riff = u32::from_le_bytes(h[4..8].try_into().unwrap());
+        let data = u32::from_le_bytes(h[40..44].try_into().unwrap());
+        assert_eq!(u64::from(data), MAX_WAV_FRAMES * FRAME_BYTES as u64);
+        assert_eq!(riff, data + 36);
+        assert!(u32::MAX - riff < FRAME_BYTES as u32);
+        assert!(header(MAX_WAV_FRAMES + 1).is_err());
+    }
+
+    #[test]
+    fn last_packet_fits_only_if_its_silence_and_pcm_both_fit() {
+        let written = MAX_WAV_FRAMES - 300;
+        assert_eq!(packet_start(written, written + 96, 300), Some(written));
+        assert_eq!(packet_start(written, written - 1, 301), None);
+        assert_eq!(
+            packet_start(written, written + 100, 200),
+            Some(written + 100)
+        );
+        assert_eq!(packet_start(written, written + 100, 201), None);
     }
 }
