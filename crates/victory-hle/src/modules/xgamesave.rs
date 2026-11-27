@@ -252,7 +252,7 @@ fn current(dir: &Path) -> std::io::Result<Option<Version>> {
     // Versions exist but none reads: keep them all, and refuse.
     Err(std::io::Error::new(
         std::io::ErrorKind::InvalidData,
-        "no save version has a readable manifest",
+        "no save version has a readable manifest and all of its blob files",
     ))
 }
 
@@ -1455,9 +1455,11 @@ mod tests {
     fn an_unreadable_newer_version_does_not_cost_the_save() {
         type Make = fn(&Path);
         let strays: [(&str, Make); 5] = [
-            ("missing blob", |p| {
+            ("second blob missing", |p| {
                 std::fs::create_dir(p).unwrap();
-                std::fs::write(p.join(MANIFEST), manifest("Slot", "incomplete", &["a"])).unwrap();
+                let names = manifest("Slot", "incomplete", &["a", "b"]);
+                std::fs::write(p.join(MANIFEST), names).unwrap();
+                std::fs::write(p.join("0"), b"partial a").unwrap();
             }),
             ("blob is a directory", |p| {
                 std::fs::create_dir_all(p.join("0")).unwrap();
@@ -1488,6 +1490,25 @@ mod tests {
             // Read again: the new version stays the container.
             assert_eq!(state(root), after, "{what}: second read");
         }
+    }
+
+    #[test]
+    fn an_empty_blob_or_container_can_supersede_an_older_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        assert_eq!(update(root, "one", &[("a", Some("old a"))]), S_OK);
+        let slot = container_dir(root, "Slot");
+
+        commit(&slot, 2, "Slot", "two", &[("a", Source::Data(b""))]).unwrap();
+        assert_eq!(
+            state(root),
+            Some(("two".into(), vec![("a".into(), String::new())]))
+        );
+        assert!(!slot.join("v1").exists());
+
+        commit(&slot, 3, "Slot", "three", &[]).unwrap();
+        assert_eq!(state(root), Some(("three".into(), Vec::new())));
+        assert!(!slot.join("v2").exists());
     }
 
     /// With no readable version at all, reads and updates fail and nothing
