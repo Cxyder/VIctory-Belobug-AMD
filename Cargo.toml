@@ -27,6 +27,7 @@ victory-game = { path = "crates/victory-game" }
 anyhow = "1.0.104"
 thiserror = "2.0.21"
 clap = { version = "4.6.9", features = ["derive"] }
+syn = { version = "2.0.119", default-features = false, features = ["full", "parsing"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+syn.workspace = true
 walkdir.workspace = true
 
 [lints]

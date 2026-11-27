@@ -160,3 +160,6 @@ The `--diverge` family runs the recorded copies without the merge.
 Tests: `cargo test -p victory-gpu --features diagnostics` (`tests/replay.rs`
 runs a small program and compares every byte; `VICTORY_TEST_D3D_DEBUG=1` adds
 the debug layer) and `tests/replay_big.rs` (`--ignored`).
+
+When changing replay options or this reference, run `cargo xtask replay-docs`.
+It reports missing and unknown option names without building or running the player.
